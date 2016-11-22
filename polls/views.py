@@ -28,6 +28,7 @@ def customSerializeDatetime(obj):
     raise TypeError("Type not serializable Boo")
 
  # Returns the datetime parameter from params
+
 def removeDateTime(params):
     if params is None:
         return None
