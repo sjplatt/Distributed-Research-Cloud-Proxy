@@ -41,34 +41,64 @@ def removeDateTime(params):
         return tuple(res)
 
 def sendCallBack(key, curSource):
-    sources = list(cacheSource.get(key))
+    sources = eval(cacheSource.get(removeDateTimeFromKey(key)))
     for source in sources:
-        if not source == curSource:
-            print "SENDING CALLBACK TO " + str(source)
+        print "SENDING CALLBACK TO " + str(source)
+        print "KEY " + removeDateTimeFromKey(key)
 
 def convertToKey(sql, params):
     if params is None:
         return str(sql)
+    elif not "datetime" in str(params):
+        return str(sql) + "|" + str(params)
     else:
-        return str(sql) + "|" + str(removeDateTime(params))
+        return str(sql) + "|" + json.dumps(params, default=customSerializeDatetime)
+
+def removeDateTimeFromKey(key):
+    if not "datetime" in str(key):
+        return key
+
+    body = key.split("|")
+    query, params = body[0], None
+    if len(body) == 2:
+        params = json.loads(body[1], object_pairs_hook=customDeserializeDatetime)
+        params = [p for p in params if not "datetime" in str(p)]
+
+    return convertToKey(query, params)
+
+def inCache(sql, params):
+    key = convertToKey(sql, params)
+    if not "datetime" in str(key):
+        return cacheQuery.get(key), cacheSource.get(key)
+    
+    no_datetime = removeDateTimeFromKey(key)
+    for k in cacheQuery.keys():
+        if removeDateTimeFromKey(k) == no_datetime:
+            return cacheQuery.get(k), cacheSource.get(k)
+    return None, None
 
 def convertToValue(data, rc, error, ret):
     return json.dumps([ret, data, rc, error], default=customSerializeDatetime)
 
-def lookupAndCompare(key, params, curSource):
+def lookupAndCompare(key, curSource):
     split = key.split("|")
     sql, params = split[0], None
     if len(split) == 2:
-        params = list(split[1])
+        if "datetime" in str(split[1]):
+            params = json.loads(split[1], object_pairs_hook=customDeserializeDatetime)
+        else:
+            params = eval(split[1])
+        if not params is None:
+            params = [customDeserializeDatetime(p) for p in params]
 
-    curValue = cacheQuery.get(convertToKey(sql,params))
+    curValue = cacheQuery.get(key)
     
     if not curValue:
         return
     
     with connection.cursor() as cursor:
         # 1) Execute query
-        cursor.execute(sql, params)
+        ret = cursor.execute(sql, params)
 
         rc = cursor.rowcount
         error = False
@@ -82,9 +112,9 @@ def lookupAndCompare(key, params, curSource):
             error = True
 
         # Current value for query
-        myValue = convertToValue(val, rc, error)
+        myValue = convertToValue(val, rc, error, ret)
         if not myValue == curValue:
-            putInCache(key, myValue)
+            putInCache(key, myValue, curSource)
             sendCallBack(key, curSource)
             print("Changed Query")
         else:
@@ -100,23 +130,28 @@ def putInCache(key, value, curSource):
 
     cacheQuery.set(key, value)
 
+    key = removeDateTimeFromKey(key)
     sources = cacheSource.get(key)
     if not sources:
-        cacheSource.set(key, [curSource])
+        cacheSource.set(key, str([curSource]))
     else:
+        sources = eval(sources)
         if not curSource in sources:
             sources += [curSource]
-            cacheSource.set(key, sources)
+            cacheSource.set(key, str(sources))
 
 @csrf_exempt
 def index(request):
+    # cacheQuery.flushall()
+    # cacheSource.flushall()
     body = request.body.split("|")
     source = request.META["HTTP_SOURCE"]
     query, params = body[0], None
-    #print(query, params)
+
     if len(body) == 2:
         params = json.loads(body[1], object_pairs_hook=customDeserializeDatetime)
-        params = [customDeserializeDatetime(p) for p in params]
+        if not params is None:
+            params = [customDeserializeDatetime(p) for p in params]
 
     with connection.cursor() as cursor:
         # Execute query
@@ -132,10 +167,6 @@ def index(request):
         except:
             val = []
             error = True
-
-        # If Key in cache, check callbacks for key
-        if not "SELECT" in str(query):
-            lookupAndCompare(convertToKey(query, params), source)
 
         # Add key to cache
         if "SELECT" in str(query):
