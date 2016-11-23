@@ -6,12 +6,14 @@ import redis
 import json
 import dateutil.parser
 import datetime
+import requests
 
 # Create your views here.
 
 cacheQuery = redis.StrictRedis(host='localhost', port=6379, db=0)
 cacheSource = redis.StrictRedis(host='localhost', port=6379, db=1)
 
+static_callback = "http://128.2.213.140"
 
 def customDeserializeDatetime(obj):
     try:
@@ -44,7 +46,7 @@ def sendCallBack(key, curSource):
     sources = eval(cacheSource.get(removeDateTimeFromKey(key)))
     for source in sources:
         print "SENDING CALLBACK TO " + str(source)
-        print "KEY " + removeDateTimeFromKey(key)
+        r = requests.post("http://128.2.213.140:5555/proxy/callBack/", data=removeDateTimeFromKey(key))
 
 def convertToKey(sql, params):
     if params is None:
@@ -116,9 +118,6 @@ def lookupAndCompare(key, curSource):
         if not myValue == curValue:
             putInCache(key, myValue, curSource)
             sendCallBack(key, curSource)
-            print("Changed Query")
-        else:
-            print("Non-changed Query")
     
 def containsDateTime(data):
     return "datetime.datetime" in str(data)
